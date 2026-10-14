@@ -1,5 +1,6 @@
 /** 各指标贡献权重 */
 export interface FactorContribution {
+  code?: string
   factor: string
   category: string
   weight: number
@@ -8,6 +9,7 @@ export interface FactorContribution {
 
 /** 扣分原因（前三项负面指标） */
 export interface Deduction {
+  code?: string
   factor: string
   score: number
   reason: string
@@ -25,6 +27,48 @@ export interface RiskResult {
   advice: string // 信贷建议文本
   veto?: string | null // 一票否决命中指标名（动态引擎）
   completeness?: number // 数据完整度 0~1
+  overrides?: string[]
+  engineUsage?: EngineUsage
+  riskAlerts?: RiskAlert[]
+  transparency?: RiskTransparency
+}
+
+export interface EngineUsage {
+  expertCalls: number
+  dataLayerApplications: number
+}
+
+export interface RiskAlert {
+  code: string
+  factor: string
+  severity: 'veto' | 'high'
+  reason: string
+  score: number | null
+}
+
+export interface RiskTransparencyIndicator {
+  code: string
+  name: string
+  level: string
+  unit: string
+  value: string | null
+  dataSource: string
+  riskMeaning: string
+  scoringRule: string
+  score: number | null
+  weight: number | null
+  status: 'provided' | 'missing' | 'invalid' | 'unscored'
+}
+
+export interface RiskTransparency {
+  expectedCount: number
+  providedCount: number
+  scoredCount: number
+  missingCodes: string[]
+  confidence: number
+  confidenceLabel: string
+  confidenceExplanation: string
+  indicators: RiskTransparencyIndicator[]
 }
 
 // ================= 动态指标体系（Phase 1/2）=================
@@ -49,6 +93,7 @@ export interface IndicatorField {
   cycle: string
   scoring_rule: string
   required: boolean
+  region_tags?: string[]
   min_value?: number | null // 数值型：取值下限（后端解析）
   max_value?: number | null // 数值型：取值上限（后端解析）
 }
