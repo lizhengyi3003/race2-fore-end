@@ -3,17 +3,20 @@
   支持打印报告、查看原始表单、历史评估记录（分页/查看/删除）。
 -->
 <script setup lang="ts">
-import { computed, nextTick, onBeforeUnmount, onMounted, ref } from 'vue'
+import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { useRouter } from 'vue-router'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { useRiskStore } from '@/stores/risk'
 import * as echarts from 'echarts'
 import ScoreGauge from '@/components/ScoreGauge.vue'
 import RiskBadge from '@/components/RiskBadge.vue'
+import RiskAlertModal from '@/components/RiskAlertModal.vue'
+import DataTransparency from '@/components/DataTransparency.vue'
 import { deleteRiskRecord, getRiskRecord, getRiskRecords } from '@/api/risk'
 import type { AssessmentRecordDetail, AssessmentRecordItem } from '@/api/types'
 import { APP_FULL_NAME, APP_VERSION } from '@/constants'
 
+const shownAlertResults = new WeakSet<object>()
 const router = useRouter()
 const riskStore = useRiskStore()
 
@@ -31,6 +34,7 @@ onMounted(() => {
   }
   window.addEventListener('resize', handleResize)
   loadHistory()
+  if (viewingHistoryId.value) restoreHistoryContext()
 })
 
 onBeforeUnmount(() => {
@@ -48,17 +52,39 @@ const historyPage = ref(1)
 const historySize = 8
 const historyLoading = ref(false)
 // 当前正在查看的历史记录（用于标题展示与删除联动）
-const viewingHistoryId = ref(0)
+const viewingHistoryId = ref(riskStore.historyRecordId || 0)
 const currentHistoryName = ref('')
 // 当前历史详情（含原始指标明细，供「查看原始表单」）
 const currentHistoryDetail = ref<AssessmentRecordDetail | null>(null)
+const alertModalVisible = ref(false)
+const transparencyRef = ref<{ scrollToIndicator: (code: string) => void } | null>(null)
+const activeAlerts = computed(() =>
+  (result.value?.riskAlerts || []).filter((alert) => alert.severity === 'veto' || alert.severity === 'high')
+)
+
+watch(
+  () => result.value,
+  (nextResult) => {
+    const alerts = (nextResult?.riskAlerts || []).filter(
+      (alert) => alert.severity === 'veto' || alert.severity === 'high'
+    )
+    if (!nextResult || !alerts.length || shownAlertResults.has(nextResult)) return
+    shownAlertResults.add(nextResult)
+    alertModalVisible.value = true
+  },
+  { immediate: true }
+)
 
 // ---------- 原始表单查看 ----------
 const formDrawerVisible = ref(false)
 const formRows = ref<{ name: string; level: string; unit: string; value: string }[]>([])
 
 function showForm() {
-  if (viewingHistoryId.value && currentHistoryDetail.value) {
+  if (viewingHistoryId.value) {
+    if (!currentHistoryDetail.value) {
+      ElMessage.info('历史记录详情正在加载，请稍后再试')
+      return
+    }
     const iv = currentHistoryDetail.value.indicatorValues || []
     formRows.value = iv.map((r) => ({ name: r.name, level: r.level, unit: r.unit, value: r.value ?? '' }))
   } else {
@@ -81,6 +107,16 @@ async function loadHistory(page = 1) {
   }
 }
 
+async function restoreHistoryContext() {
+  try {
+    const detail = await getRiskRecord(viewingHistoryId.value)
+    currentHistoryName.value = detail.enterpriseName || ''
+    currentHistoryDetail.value = detail
+  } catch {
+    // 错误已由拦截器提示
+  }
+}
+
 function formatTime(iso?: string): string {
   if (!iso) return ''
   const d = new Date(iso)
@@ -99,6 +135,7 @@ async function viewHistory(recordId: number) {
     riskStore.setResult(detail.result)
     currentHistoryName.value = detail.enterpriseName || ''
     viewingHistoryId.value = recordId
+    riskStore.setHistoryRecordId(recordId)
     currentHistoryDetail.value = detail
     await nextTick()
     initBarChart()
@@ -126,6 +163,7 @@ async function removeHistory(row: AssessmentRecordItem) {
       currentHistoryName.value = ''
       viewingHistoryId.value = 0
       currentHistoryDetail.value = null
+      riskStore.setHistoryRecordId(null)
     }
     if (historyRecords.value.length === 1 && historyPage.value > 1) {
       loadHistory(historyPage.value - 1)
@@ -243,6 +281,21 @@ function initBarChart() {
 function goBack() {
   router.push('/input')
 }
+
+function supplementData(code = '') {
+  const historyId = viewingHistoryId.value || riskStore.historyRecordId
+  if (historyId) {
+    router.push({ path: '/input', query: { recordId: String(historyId), focusCode: code || undefined } })
+    return
+  }
+  router.push({ path: '/input', query: { restoreCurrent: '1', focusCode: code || undefined } })
+}
+
+async function jumpToIndicator(code: string) {
+  await nextTick()
+  if (code) transparencyRef.value?.scrollToIndicator(code)
+  else document.getElementById('data-transparency')?.scrollIntoView({ behavior: 'smooth', block: 'start' })
+}
 </script>
 
 <template>
@@ -351,6 +404,14 @@ function goBack() {
           <p class="scroll-hint">← 左右滑动查看全部指标 →</p>
         </div>
 
+        <DataTransparency
+          v-if="result.transparency"
+          ref="transparencyRef"
+          :transparency="result.transparency"
+          :completeness="result.completeness"
+          @supplement="supplementData"
+        />
+
         <!-- 操作按钮 -->
         <div class="action-bar">
           <el-button @click="goBack">
@@ -360,6 +421,10 @@ function goBack() {
           <el-button @click="showForm">
             <el-icon><Document /></el-icon>
             查看原始表单
+          </el-button>
+          <el-button v-if="activeAlerts.length" type="warning" plain @click="alertModalVisible = true">
+            <el-icon><WarningFilled /></el-icon>
+            复核风险提示
           </el-button>
           <el-button type="primary" @click="handlePrint">
             <el-icon><Printer /></el-icon>
@@ -433,6 +498,8 @@ function goBack() {
         </div>
       </div>
     </div>
+
+    <RiskAlertModal v-model="alertModalVisible" :alerts="activeAlerts" @view="jumpToIndicator" />
 
     <!-- 原始表单抽屉 -->
     <el-drawer v-model="formDrawerVisible" title="评估原始表单" size="min(640px, 92%)">

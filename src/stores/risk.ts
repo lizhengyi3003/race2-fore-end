@@ -6,6 +6,7 @@ import { submitDynamicRiskAssessment } from '@/api/risk'
 export const useRiskStore = defineStore('risk', () => {
   // --- State ---
   const riskResult = ref<RiskResult | null>(null)
+  const historyRecordId = ref<number | null>(null)
 
   // --- Getters ---
   const hasResult = computed(() => riskResult.value !== null)
@@ -30,6 +31,7 @@ export const useRiskStore = defineStore('risk', () => {
   async function assessDynamic(): Promise<boolean> {
     try {
       riskResult.value = await submitDynamicRiskAssessment(dynamicForm.value)
+      historyRecordId.value = null
       return true
     } catch {
       return false
@@ -41,6 +43,10 @@ export const useRiskStore = defineStore('risk', () => {
     riskResult.value = result
   }
 
+  function setHistoryRecordId(recordId: number | null) {
+    historyRecordId.value = recordId
+  }
+
   // 本次评估提交时的原始表单快照（供结果页查看）
   const formSnapshot = ref<FormSnapshotItem[]>([])
   function setFormSnapshot(items: FormSnapshotItem[]) {
@@ -49,11 +55,13 @@ export const useRiskStore = defineStore('risk', () => {
 
   return {
     riskResult,
+    historyRecordId,
     hasResult,
     dynamicForm,
     setDynamicForm,
     assessDynamic,
     setResult,
+    setHistoryRecordId,
     formSnapshot,
     setFormSnapshot,
   }

@@ -3,17 +3,19 @@
   填写基本项 + 动态指标后提交评估；支持混合经营占比分配与页内重试。
 -->
 <script setup lang="ts">
-import { computed, onMounted, reactive, ref, watch } from 'vue'
-import { useRouter } from 'vue-router'
+import { computed, nextTick, onMounted, reactive, ref, watch } from 'vue'
+import { useRoute, useRouter } from 'vue-router'
 import { ElMessage } from 'element-plus'
 import { useRiskStore } from '@/stores/risk'
 import { getIndicatorTree } from '@/api/indicator'
-import type { CategoryNode, IndicatorField } from '@/api/types'
+import { getRiskRecord } from '@/api/risk'
+import type { CategoryNode, DynamicRiskInput, IndicatorField } from '@/api/types'
 import DynamicField from '@/components/DynamicField.vue'
 import MixedRatioSlider from '@/components/MixedRatioSlider.vue'
 import { validateIndicatorFieldMap } from '@/utils/validateIndicator'
 
 const router = useRouter()
+const route = useRoute()
 const riskStore = useRiskStore()
 
 const loading = ref(false)
@@ -26,6 +28,7 @@ const basicFields = ref<IndicatorField[]>([])
 // ---------- 提交后字段级错误（仅点击提交后显示，填写后清除）----------
 const fieldErrors = reactive<Record<string, string>>({})
 const enterpriseNameError = ref('')
+const restoreNotice = ref('')
 
 function clearFieldError(code: string) {
   if (fieldErrors[code]) delete fieldErrors[code]
@@ -164,11 +167,63 @@ async function init() {
     basicFields.value.forEach((f) => {
       if (!(f.code in values)) values[f.code] = ''
     })
+    await restoreRequestedInput()
   } catch {
     loadError.value = true
     ElMessage.error('指标配置加载失败，请检查网络后点击「重新加载」')
   } finally {
     loading.value = false
+  }
+}
+
+function isDynamicRiskInput(value: unknown): value is DynamicRiskInput {
+  if (!value || typeof value !== 'object') return false
+  const candidate = value as Partial<DynamicRiskInput>
+  return (
+    typeof candidate.enterpriseName === 'string' &&
+    Array.isArray(candidate.selectedCategories) &&
+    !!candidate.indicators &&
+    typeof candidate.indicators === 'object'
+  )
+}
+
+async function restoreInputSnapshot(snapshot: DynamicRiskInput, notice: string) {
+  enterpriseName.value = snapshot.enterpriseName
+  enterpriseNameError.value = ''
+  checkedLeaves.value = [...snapshot.selectedCategories]
+  mixedRatios.value = { ...(snapshot.mixedBusiness || {}) }
+  await nextTick()
+  treeRef.value?.setCheckedKeys(snapshot.selectedCategories)
+  onTreeCheck()
+  Object.assign(values, snapshot.indicators)
+  Object.keys(fieldErrors).forEach((key) => delete fieldErrors[key])
+  restoreNotice.value = notice
+  await nextTick()
+  const focusCode = typeof route.query.focusCode === 'string' ? route.query.focusCode : ''
+  if (focusCode) document.getElementById(`input-${focusCode}`)?.scrollIntoView({ behavior: 'smooth', block: 'center' })
+}
+
+async function restoreRequestedInput() {
+  const recordId = Number(route.query.recordId)
+  if (Number.isInteger(recordId) && recordId > 0) {
+    try {
+      const detail = await getRiskRecord(recordId)
+      if (!isDynamicRiskInput(detail.input)) {
+        ElMessage.warning('该历史记录没有可恢复的完整录入快照')
+        return
+      }
+      await restoreInputSnapshot(
+        detail.input,
+        `正在补录「${detail.enterpriseName}」的历史评估快照。原始无效值会保留在对应字段，修正后重新提交将生成新的评估记录。`
+      )
+    } catch {
+      // 错误已由拦截器提示
+    }
+    return
+  }
+
+  if (route.query.restoreCurrent === '1' && riskStore.dynamicForm.enterpriseName) {
+    await restoreInputSnapshot(riskStore.dynamicForm, '已载入刚才评估使用的录入数据，可补充或修正后重新评估。')
   }
 }
 
@@ -266,6 +321,14 @@ onMounted(init)
       </div>
 
       <template v-else>
+        <el-alert
+          v-if="restoreNotice"
+          :title="restoreNotice"
+          type="info"
+          show-icon
+          :closable="false"
+          class="restore-alert"
+        />
         <!-- 基本信息 -->
         <div class="section-title">基本信息</div>
         <el-form label-width="110px" label-position="left" class="basic-form">
@@ -414,6 +477,9 @@ onMounted(init)
 }
 .input-card {
   border-radius: 10px;
+}
+.restore-alert {
+  margin-bottom: 16px;
 }
 .section-title {
   font-weight: 600;

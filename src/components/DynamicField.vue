@@ -4,6 +4,7 @@
   校验交互：错误提示仅在提交后由父组件传入（error），用户填写即清除（clear-error）。
 -->
 <script setup lang="ts">
+import { computed } from 'vue'
 import type { PropType } from 'vue'
 import type { IndicatorField } from '@/api/types'
 
@@ -18,6 +19,42 @@ const emit = defineEmits<{
   (e: 'clear-error'): void
 }>()
 
+const numericIssue = computed(() => {
+  const raw = props.modelValue
+  if (props.field.indicator_type !== '数值' || raw === '') return ''
+  if (raw.trim() === '') return '为空白值'
+  const decimalPattern = /^[+-]?(?:\d+\.?\d*|\.\d+)(?:[eE][+-]?\d+)?$/
+  if (!decimalPattern.test(raw.trim())) return '不是有效数值'
+  const value = Number(raw)
+  if (!Number.isFinite(value)) return '不是有限数值'
+  const min = props.field.min_value ?? 0
+  if (value < min) return `低于允许下限 ${min}`
+  if (props.field.max_value != null && value > props.field.max_value) {
+    return `高于允许上限 ${props.field.max_value}`
+  }
+  return ''
+})
+
+const legacyIssue = computed(() => {
+  if (numericIssue.value) return `原始值「${props.modelValue}」${numericIssue.value}，请修正后再提交。`
+  if (
+    props.field.indicator_type === '枚举' &&
+    props.modelValue !== '' &&
+    !props.field.options.includes(props.modelValue)
+  ) {
+    return `原始值「${props.modelValue}」不在当前可选项中，请重新选择。`
+  }
+  if (
+    props.field.indicator_type === '布尔' &&
+    props.modelValue !== '' &&
+    props.modelValue !== '是' &&
+    props.modelValue !== '否'
+  ) {
+    return `原始值「${props.modelValue}」不是有效的“是 / 否”选项，请重新选择。`
+  }
+  return ''
+})
+
 function setVal(v: string | number | boolean | undefined | null) {
   const str = v === undefined || v === null ? '' : String(v)
   emit('update:modelValue', str)
@@ -28,6 +65,7 @@ function setVal(v: string | number | boolean | undefined | null) {
 
 <template>
   <el-form-item
+    :id="`input-${field.code}`"
     :label="field.name"
     :required="field.required && field.indicator_type !== '文本'"
     :error="error"
@@ -41,9 +79,21 @@ function setVal(v: string | number | boolean | undefined | null) {
       </span>
     </template>
 
+    <div v-if="legacyIssue" class="legacy-value-warning" role="alert">
+      <el-icon><WarningFilled /></el-icon>
+      {{ legacyIssue }}
+    </div>
+
     <!-- 数值 -->
     <div v-if="field.indicator_type === '数值'" class="unit-wrap">
+      <el-input
+        v-if="numericIssue"
+        :model-value="modelValue"
+        :placeholder="field.value_range || '请修正原始数值'"
+        @update:model-value="setVal"
+      />
       <el-input-number
+        v-else
         :model-value="modelValue === '' ? undefined : Number(modelValue)"
         :min="field.min_value ?? 0"
         :max="field.max_value ?? undefined"
@@ -63,26 +113,23 @@ function setVal(v: string | number | boolean | undefined | null) {
       style="width: 100%"
       @update:model-value="setVal"
     >
+      <el-option
+        v-if="modelValue && !field.options.includes(modelValue)"
+        :label="`未知原值：${modelValue}`"
+        :value="modelValue"
+        disabled
+      />
       <el-option v-for="o in field.options" :key="o" :label="o" :value="o" />
     </el-select>
 
     <!-- 布尔 -->
-    <el-radio-group
-      v-else-if="field.indicator_type === '布尔'"
-      :model-value="modelValue"
-      @update:model-value="setVal"
-    >
+    <el-radio-group v-else-if="field.indicator_type === '布尔'" :model-value="modelValue" @update:model-value="setVal">
       <el-radio value="是">是</el-radio>
       <el-radio value="否">否</el-radio>
     </el-radio-group>
 
     <!-- 文本 -->
-    <el-input
-      v-else
-      :model-value="modelValue"
-      :placeholder="field.value_range"
-      @update:model-value="setVal"
-    />
+    <el-input v-else :model-value="modelValue" :placeholder="field.value_range" @update:model-value="setVal" />
   </el-form-item>
 </template>
 
@@ -98,6 +145,17 @@ function setVal(v: string | number | boolean | undefined | null) {
     margin-left: 2px;
   }
 }
+.legacy-value-warning {
+  width: 100%;
+  margin: -8px 0 8px;
+  color: #b88230;
+  font-size: 12px;
+  line-height: 1.5;
+  .el-icon {
+    margin-right: 4px;
+    vertical-align: -2px;
+  }
+}
 .unit-wrap {
   display: flex;
   align-items: center;
@@ -106,6 +164,11 @@ function setVal(v: string | number | boolean | undefined | null) {
   min-width: 0;
 
   .el-input-number {
+    flex: 1;
+    min-width: 0;
+  }
+
+  :deep(.el-input) {
     flex: 1;
     min-width: 0;
   }
