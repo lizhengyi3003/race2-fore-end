@@ -1,6 +1,6 @@
 # 涉农信贷风控系统 · 竞赛前端（fore-end）
 
-> 挑战杯创业计划竞赛（东北振兴产业升级专项赛）· 数智赋能产业组
+> "挑战杯"全国大学生课外学术科技作品竞赛
 > 面向用户的演示前端：数据录入 → 信用评估 → 结果展示，配套数据看板与团队介绍
 > 版本：Demo v1.9
 
@@ -28,7 +28,7 @@ fore-end/
 ├── src/
 │   ├── api/          # 接口封装（auth / captcha / risk / indicator / dashboard / index）
 │   │   └── index.ts  # axios 实例：自动分流、JWT、信封解包、401 统一处理
-│   ├── components/   # 通用组件（DynamicField / MixedRatioSlider / RiskBadge / ScoreGauge / StatCard）
+│   ├── components/   # 动态字段、混合经营占比、风险弹窗、数据透明度与图表组件
 │   ├── layouts/      # 应用布局（AppLayout：侧边栏 + 抽屉 + 顶栏）
 │   ├── router/       # 路由（懒加载 + chunk 失效自动刷新 + 登录守卫 + 导航菜单 NAV_MENUS）
 │   ├── stores/       # Pinia（auth 登录态 / risk 评估结果与表单）
@@ -49,20 +49,22 @@ fore-end/
 ```bash
 cd fore-end
 npm install
-npm run dev        # http://localhost:5174，/api 代理到 localhost:8000
+npm run dev        # http://localhost:5175，/api 代理到 localhost:18001
 ```
 
 环境变量：
 
 | 文件 | 值 | 说明 |
 |---|---|---|
-| `.env.development` | `VITE_API_BASE_URL=/api/v1` | 开发走 Vite 代理（vite.config.ts 代理到 :8000） |
+| `.env.development` | `VITE_API_BASE_URL=/api/v1` | 开发走 Vite 代理（vite.config.ts 默认代理到 :18001，可通过 VITE_DEV_PROXY 覆盖） |
 | `.env.production` | （已注释） | 生产**按域名运行时分流**：`src/api/index.ts` 依据 `hostname` 自动选择主站 `/api/v1` 或 dev 预览 `/dev/api/v1`，无需环境变量 |
 
 ## 与后端契约
 
 - 接口封装：`src/api/`（`auth.ts` 登录、`risk.ts` 动态评估与历史记录、`indicator.ts` 指标树、`types.ts` 类型契约）
 - 动态指标体系：勾选具体营业类型后由后端 `/indicators/tree` 加载（基本项 + 大类→中类→小类→具体营业类型）
+- 区域元数据：适用范围为「全国通用 / 区域可配置 / 示例：东北」，另以 `region_tags` 维护省份与农业区。
+- 评估解释：即时结果与历史记录均支持 `riskAlerts`、`transparency`、指标定位及历史补录；有效覆盖率衡量数据充分程度，不表示预测准确率。
 - 登录态：`src/stores/auth.ts`（token 存 `race_token`，401 自动清理并跳登录）
 - 评估表单状态：`src/stores/risk.ts`
 - 路由守卫：`src/router/index.ts`（`/input` `/result` `/dashboard` 需登录；懒加载 chunk 失效自动刷新）
@@ -75,13 +77,15 @@ npm run dev        # http://localhost:5174，/api 代理到 localhost:8000
 |---|---|
 | `docs/《农业及相关产业统计分类（2020）》.docx` | 官方分类表原始文件（大类/中类/小类 + 行业代码） |
 | `docs/《农业及相关产业统计分类（2020）》.md` | 分类表纯文本版（403 行，与 docx 逐条一致） |
-| `docs/农业及相关产业动态指标搜集体系.xlsx` | 东北振兴版分层动态指标搜集体系（3020 行 × 14 列） |
+| `docs/农业及相关产业动态指标搜集体系.xlsx` | 全国通用与区域可配置指标体系（3023 条 × 15 列；保留原 3020 条，新增 3 条区域配置示例） |
 | `docs/农业及相关产业动态指标搜集体系.md` | 指标体系文本版（与 xlsx 逐条一致） |
 | `docs/涉农信贷风控模型说明.md` | 模型说明：指标判断、专家引擎、评分卡训练流程、评估指标、双引擎混合决策 |
 | `docs/涉农信贷风控模型全流程说明.md` | 模型全流程说明（版本演进 + 数学公式，供数学组/答辩） |
 | `docs/前端架构说明.md` | 前端架构：分层结构、请求链路、状态管理、路由与部署说明 |
 
 > 一致性校验：docx ↔ 分类表 md、xlsx ↔ 指标体系 md 已全量核对一致（代码、名称、说明、行业代码、层级归属均无差异）。
+
+旧版 14 列指标表、全国化中间版本及改造记录保存在同级后端仓库的 `docs_archive_20260920/` 和 `data/nationalize_*.csv`，仅供追溯；当前导入与前后端契约以本目录的 15 列版本为准。已有后端数据库应先执行 `scripts/migrate_202610_region_tags.py`；结构迁移不会自动更新指标内容，重跑指标导入前需备份人工维护的评分配置。
 
 ## 质量检查
 
@@ -114,5 +118,5 @@ flowchart LR
 
 1. `npm run build` 生成 `dist`
 2. 上传到 `race-fore-end` Worker（静态资源 Worker，或用 wrangler `[assets]`）
-3. 生产 API 地址在 `.env.production` 中配置，无需手动改
+3. 默认按域名自动选择生产或预览 API；如需覆盖，再配置 `.env.production` 中的 `VITE_API_BASE_URL`
 4. 部署后访问 https://intellicoretech.cn

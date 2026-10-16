@@ -24,4 +24,4 @@ export const TOKEN_KEY = 'race_token'
 export const USER_KEY = 'race_user'
 
 /** 页脚版权文案（布局与登录页共用） */
-export const FOOTER_TEXT = '© 2026 涉农信贷风控系统 · "挑战杯"创业计划竞赛 · 东北乡村振兴'
+export const FOOTER_TEXT = '© 2026 涉农信贷风控系统 · "挑战杯"全国大学生课外学术科技作品竞赛'

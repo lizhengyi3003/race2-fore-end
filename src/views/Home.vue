@@ -59,7 +59,7 @@ const coreFeatures = [
     icon: 'Files',
     color: '#2c6e49',
     title: '四层动态指标树',
-    desc: '基本项 + 大类 → 中类 → 小类 → 具体营业类型，700+ 指标按实际经营自动加载，未填指标不参与计分。',
+    desc: '基本项 + 大类 → 中类 → 小类 → 具体营业类型，3000+ 指标按实际经营自动加载，未填指标不参与计分。',
   },
   {
     icon: 'CircleCloseFilled',
@@ -88,7 +88,7 @@ const coreFeatures = [
     <section class="hero-section">
       <div class="hero-content">
         <h1 class="hero-title">涉农小微企业信贷风险智能评估系统</h1>
-        <p class="hero-subtitle">用得起 · 看得懂 · 信得过 — 东北县域农商行的轻量化涉农信贷风控工具</p>
+        <p class="hero-subtitle">用得起 · 看得懂 · 信得过 — 全国县域农商行的轻量化涉农信贷风控工具</p>
         <div class="hero-tags">
           <el-tag type="success" effect="dark" round>专家规则引擎</el-tag>
           <el-tag type="success" effect="dark" round>四层动态指标树</el-tag>
