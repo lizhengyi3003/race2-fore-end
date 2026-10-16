@@ -1,6 +1,6 @@
 <!--
   评估结果页：信用评分仪表盘 / 风险等级 / 违约概率 / 授信建议 / 指标贡献图 / 前三项扣分原因，
-  支持打印报告、查看原始表单、历史评估记录（分页/查看/删除）。
+  支持打印报告、查看原始表单、历史评估记录（分页/查看/回填/删除）。
 -->
 <script setup lang="ts">
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
@@ -12,8 +12,8 @@ import ScoreGauge from '@/components/ScoreGauge.vue'
 import RiskBadge from '@/components/RiskBadge.vue'
 import RiskAlertModal from '@/components/RiskAlertModal.vue'
 import DataTransparency from '@/components/DataTransparency.vue'
-import { deleteRiskRecord, getRiskRecord, getRiskRecords } from '@/api/risk'
-import type { AssessmentRecordDetail, AssessmentRecordItem } from '@/api/types'
+import { deleteRiskRecord, getRiskRecord, getRiskRecords, updateRiskRecordOutcome } from '@/api/risk'
+import type { AssessmentOutcome, AssessmentRecordDetail, AssessmentRecordItem } from '@/api/types'
 import { APP_FULL_NAME, APP_VERSION } from '@/constants'
 
 const shownAlertResults = new WeakSet<object>()
@@ -51,6 +51,15 @@ const historyTotal = ref(0)
 const historyPage = ref(1)
 const historySize = 8
 const historyLoading = ref(false)
+const outcomeVisible = ref(false)
+const outcomeSaving = ref(false)
+const outcomeForm = ref({ id: 0, enterpriseName: '', outcome: 'pending' as AssessmentOutcome, note: '' })
+const OUTCOME_OPTIONS = [
+  { label: '正常还款', value: 'normal', type: 'success' },
+  { label: '逾期', value: 'overdue', type: 'danger' },
+  { label: '未放款', value: 'rejected', type: 'info' },
+  { label: '待回填', value: 'pending', type: 'warning' },
+] as const
 // 当前正在查看的历史记录（用于标题展示与删除联动）
 const viewingHistoryId = ref(riskStore.historyRecordId || 0)
 const currentHistoryName = ref('')
@@ -142,6 +151,46 @@ async function viewHistory(recordId: number) {
     window.scrollTo({ top: 0, behavior: 'smooth' })
   } catch {
     // 错误已由拦截器提示
+  }
+}
+
+function outcomeOption(outcome?: AssessmentOutcome) {
+  return OUTCOME_OPTIONS.find((option) => option.value === outcome) || OUTCOME_OPTIONS[3]
+}
+
+function openOutcome(row: AssessmentRecordItem) {
+  if (outcomeSaving.value) return
+  outcomeForm.value = {
+    id: row.id,
+    enterpriseName: row.enterpriseName,
+    outcome: row.outcome || 'pending',
+    note: row.outcomeNote || '',
+  }
+  outcomeVisible.value = true
+}
+
+async function saveOutcome() {
+  if (outcomeSaving.value) return
+  outcomeSaving.value = true
+  try {
+    const updated = await updateRiskRecordOutcome(outcomeForm.value.id, {
+      outcome: outcomeForm.value.outcome,
+      note: outcomeForm.value.note,
+    })
+    historyRecords.value = historyRecords.value.map((row) => (row.id === updated.id ? { ...row, ...updated } : row))
+    if (currentHistoryDetail.value?.id === updated.id) {
+      Object.assign(currentHistoryDetail.value, {
+        outcome: updated.outcome,
+        outcomeNote: updated.outcomeNote,
+        outcomeAt: updated.outcomeAt,
+      })
+    }
+    outcomeVisible.value = false
+    ElMessage.success('已回填')
+  } catch {
+    // 错误已由拦截器提示，保留弹窗和已填写内容供重试。
+  } finally {
+    outcomeSaving.value = false
   }
 }
 
@@ -456,7 +505,7 @@ async function jumpToIndicator(code: string) {
             size="small"
             stripe
             empty-text="暂无历史评估记录"
-            style="min-width: 690px"
+            style="min-width: 840px"
           >
             <el-table-column prop="enterpriseName" label="企业名称" min-width="150" show-overflow-tooltip />
             <el-table-column label="评分" width="72" align="center">
@@ -477,9 +526,17 @@ async function jumpToIndicator(code: string) {
             <el-table-column label="评估时间" width="150">
               <template #default="{ row }">{{ formatTime(row.createdAt) }}</template>
             </el-table-column>
-            <el-table-column label="操作" width="120" align="center">
+            <el-table-column label="回填结果" width="110" align="center">
+              <template #default="{ row }">
+                <el-tag :type="outcomeOption(row.outcome).type" size="small">
+                  {{ outcomeOption(row.outcome).label }}
+                </el-tag>
+              </template>
+            </el-table-column>
+            <el-table-column label="操作" width="180" align="center" fixed="right">
               <template #default="{ row }">
                 <el-button link type="primary" @click="viewHistory(row.id)">查看</el-button>
+                <el-button link type="warning" @click="openOutcome(row)">回填</el-button>
                 <el-button link type="danger" @click="removeHistory(row)">删除</el-button>
               </template>
             </el-table-column>
@@ -500,6 +557,46 @@ async function jumpToIndicator(code: string) {
     </div>
 
     <RiskAlertModal v-model="alertModalVisible" :alerts="activeAlerts" @view="jumpToIndicator" />
+
+    <el-dialog
+      v-model="outcomeVisible"
+      title="回填真实结果"
+      width="min(420px, 92vw)"
+      :close-on-click-modal="false"
+      :close-on-press-escape="!outcomeSaving"
+      :show-close="!outcomeSaving"
+      append-to-body
+    >
+      <el-form label-width="90px" :disabled="outcomeSaving">
+        <el-form-item label="企业名称">
+          <span>{{ outcomeForm.enterpriseName }}</span>
+        </el-form-item>
+        <el-form-item label="真实结果">
+          <el-select v-model="outcomeForm.outcome" style="width: 100%">
+            <el-option
+              v-for="option in OUTCOME_OPTIONS"
+              :key="option.value"
+              :label="option.label"
+              :value="option.value"
+            />
+          </el-select>
+        </el-form-item>
+        <el-form-item label="备注">
+          <el-input
+            v-model="outcomeForm.note"
+            type="textarea"
+            :rows="3"
+            maxlength="255"
+            show-word-limit
+            placeholder="如：实际放款后 6 个月出现逾期"
+          />
+        </el-form-item>
+      </el-form>
+      <template #footer>
+        <el-button :disabled="outcomeSaving" @click="outcomeVisible = false">取消</el-button>
+        <el-button type="primary" :loading="outcomeSaving" @click="saveOutcome">保存</el-button>
+      </template>
+    </el-dialog>
 
     <!-- 原始表单抽屉 -->
     <el-drawer v-model="formDrawerVisible" title="评估原始表单" size="min(640px, 92%)">

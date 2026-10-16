@@ -132,6 +132,9 @@ export interface PageData<T> {
   items: T[]
 }
 
+/** 人工回填的真实放款、还款结果 */
+export type AssessmentOutcome = 'pending' | 'normal' | 'overdue' | 'rejected'
+
 /** 历史评估记录（列表项，GET /risk/records） */
 export interface AssessmentRecordItem {
   id: number
@@ -144,6 +147,9 @@ export interface AssessmentRecordItem {
   suggestedRate: number
   assessorName?: string | null
   createdAt?: string
+  outcome?: AssessmentOutcome
+  outcomeNote?: string | null
+  outcomeAt?: string | null
   completeness?: number | null
   veto?: string | null
 }

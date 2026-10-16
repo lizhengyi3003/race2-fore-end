@@ -1,5 +1,12 @@
 import http from './index'
-import type { AssessmentRecordDetail, AssessmentRecordItem, DynamicRiskInput, PageData, RiskResult } from './types'
+import type {
+  AssessmentOutcome,
+  AssessmentRecordDetail,
+  AssessmentRecordItem,
+  DynamicRiskInput,
+  PageData,
+  RiskResult,
+} from './types'
 
 /**
  * 动态指标体系评估（专家引擎）：POST /api/v1/risk/assess-dynamic
@@ -24,4 +31,12 @@ export async function getRiskRecord(recordId: number): Promise<AssessmentRecordD
 /** 删除历史评估记录：DELETE /risk/records/{id} */
 export async function deleteRiskRecord(recordId: number): Promise<void> {
   return http.delete(`/risk/records/${recordId}`)
+}
+
+/** 回填本人评估记录的真实结果；管理员同时可维护其他记录 */
+export async function updateRiskRecordOutcome(
+  recordId: number,
+  body: { outcome: AssessmentOutcome; note?: string }
+): Promise<AssessmentRecordItem> {
+  return http.put<AssessmentRecordItem>(`/risk/records/${recordId}/outcome`, body)
 }

@@ -138,13 +138,9 @@ async function doLogin() {
   try {
     await authStore.login(form.username, form.password, captchaKey)
   } catch {
-    // 登录失败：先复位提交锁，再重新弹出验证码换一张。
-    // 关键：若不先复位 loginSubmitting，loadCaptcha 的防重守卫会直接 return，
-    // 导致弹窗空白、验证码永远加载不出来（且后续所有加载都被拦截）。
+    // 登录错误由请求拦截器提示；保持验证码弹窗关闭，等待用户再次点击登录。
     loginSubmitting.value = false
     pendingCaptchaKey.value = ''
-    captchaVisible.value = true
-    loadCaptcha()
     return
   } finally {
     loading.value = false
