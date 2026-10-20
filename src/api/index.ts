@@ -17,12 +17,12 @@ interface ApiEnvelope<T = unknown> {
 //   VITE_API_BASE_URL 显式配置时优先（如本地开发 /api/v1）
 // ------------------------------------------------------------------
 const isWorkersPreview = typeof window !== 'undefined' && window.location.hostname.endsWith('.workers.dev')
-const baseURL =
+export const apiBaseURL =
   import.meta.env.VITE_API_BASE_URL ||
   (isWorkersPreview ? 'https://api.intellicoretech.cn/dev/api/v1' : 'https://api.intellicoretech.cn/api/v1')
 
 const http: AxiosInstance = axios.create({
-  baseURL,
+  baseURL: apiBaseURL,
   timeout: 15000,
   headers: {
     'Content-Type': 'application/json',
@@ -52,8 +52,9 @@ function clearAuthCache() {
   localStorage.removeItem(USER_KEY)
 }
 
-function handleAuthExpired(message: string) {
+export function handleAuthExpired(message: string) {
   clearAuthCache()
+  window.dispatchEvent(new Event('race:auth-expired'))
   if (!window.location.hash.includes('/login')) {
     ElMessage.warning('登录已过期，请重新登录')
     setTimeout(() => {
@@ -87,6 +88,7 @@ http.interceptors.response.use(
     return response
   },
   (error: AxiosError) => {
+    if (axios.isCancel(error)) return Promise.reject(error)
     // HTTP 层 401（兜底）：网关/后端直接返回 401 时同样清理凭证并跳转
     if (error.response?.status === 401) {
       handleAuthExpired('登录已过期，请重新登录')

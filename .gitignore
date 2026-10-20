@@ -54,3 +54,11 @@ test-results/
 Thumbs.db
 ehthumbs.db
 Desktop.ini
+
+# 本地测试与验收产物
+/tests/
+/outputs/
+/tmp/
+.env
+.env.test
+.env.acceptance
