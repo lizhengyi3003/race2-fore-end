@@ -5,6 +5,7 @@
 <script setup lang="ts">
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { useRouter } from 'vue-router'
+import { useAuthStore } from '@/stores/auth'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { useRiskStore } from '@/stores/risk'
 import * as echarts from 'echarts'
@@ -12,13 +13,15 @@ import ScoreGauge from '@/components/ScoreGauge.vue'
 import RiskBadge from '@/components/RiskBadge.vue'
 import RiskAlertModal from '@/components/RiskAlertModal.vue'
 import DataTransparency from '@/components/DataTransparency.vue'
-import { deleteRiskRecord, getRiskRecord, getRiskRecords, updateRiskRecordOutcome } from '@/api/risk'
-import type { AssessmentOutcome, AssessmentRecordDetail, AssessmentRecordItem } from '@/api/types'
-import { APP_FULL_NAME, APP_VERSION } from '@/constants'
+import { deleteRiskRecord, getRiskRecord, getRiskRecords, getRiskReview, openRiskReviewStream, requestRiskReview, updateRiskRecordOutcome } from '@/api/risk'
+import type { AIReview, AssessmentOutcome, AssessmentRecordDetail, AssessmentRecordItem, ReviewItem } from '@/api/types'
+import { APP_FULL_NAME, APP_VERSION, TOKEN_KEY } from '@/constants'
+import { SSEParser } from '@/utils/sse'
 
 const shownAlertResults = new WeakSet<object>()
 const router = useRouter()
 const riskStore = useRiskStore()
+const authStore = useAuthStore()
 
 const barChartRef = ref<HTMLElement>()
 let barChart: echarts.ECharts | null = null
@@ -34,16 +37,344 @@ onMounted(() => {
   }
   window.addEventListener('resize', handleResize)
   loadHistory()
-  if (viewingHistoryId.value) restoreHistoryContext()
+  const queryId = Number(router.currentRoute.value.query.recordId)
+  const id = Number.isInteger(queryId) && queryId > 0 ? queryId : viewingHistoryId.value
+  if (id) void restoreRecord(id)
+  else if (result.value?.recordId) {
+    void router.replace({ path: '/result', query: { recordId: String(result.value.recordId) } })
+  }
 })
 
 onBeforeUnmount(() => {
+  stopReviewUpdates()
+  restoreAbort?.abort()
+  clearRetryCountdown()
   window.removeEventListener('resize', handleResize)
   barChart?.dispose()
   barChart = null
 })
 
 const result = computed(() => riskStore.riskResult!)
+const aiReview = computed(() => result.value?.aiReview)
+const reviewTimedOut = ref(false)
+const reviewStatusText = computed(() => {
+  const status = aiReview.value?.status
+  if (status === 'pending') return reviewTimedOut.value
+    ? '复核仍在生成中，已暂停自动等待；稍后重新打开本记录可查看最新状态。'
+    : '正在生成复核提示…'
+  if (status === 'failed') return aiReview.value?.message || '复核提示生成失败'
+  if (status === 'disabled') return 'AI 复核未启用，以下为通用核验规则。'
+  if (status === 'not_applicable') return '本条记录没有可复核的已计分指标，以下为通用核验规则。'
+  if (!status || status === 'not_requested') return '暂无生成的复核提示，以下为通用核验规则。'
+  return ''
+})
+const retryCountdown = ref(0)
+let retryCountdownTimer = 0
+const retrySubmitting = ref(false)
+
+let reviewAbort: AbortController | null = null
+let restoreAbort: AbortController | null = null
+let reviewRun = 0
+let previewFrame = 0
+let pendingPreview: AIReview | null = null
+const reviewDeadlineMs = 90_000
+
+function isTerminalReviewError(error: unknown) {
+  return [401, 403, 404].includes((error as { code?: number }).code || 0)
+}
+
+function stopReviewUpdates() {
+  reviewRun++
+  reviewAbort?.abort()
+  reviewAbort = null
+  if (previewFrame) cancelAnimationFrame(previewFrame)
+  previewFrame = 0
+  pendingPreview = null
+}
+
+function clearRetryCountdown() {
+  window.clearInterval(retryCountdownTimer)
+  retryCountdownTimer = 0
+}
+
+watch(aiReview, (review) => {
+  clearRetryCountdown()
+  retryCountdown.value = review?.status === 'failed' && review.retryable ? Math.max(0, review.retryAfter) : 0
+  if (retryCountdown.value > 0) {
+    retryCountdownTimer = window.setInterval(() => {
+      retryCountdown.value = Math.max(0, retryCountdown.value - 1)
+      if (retryCountdown.value === 0) {
+        window.clearInterval(retryCountdownTimer)
+        retryCountdownTimer = 0
+      }
+    }, 1000)
+  }
+}, { immediate: true })
+
+type ReviewSnapshotDecision = 'apply' | 'ignore' | 'stop'
+
+function reviewSnapshotDecision(snapshot: AIReview, expectedRecordId: number, run: number, token: string): ReviewSnapshotDecision {
+  if (run !== reviewRun || localStorage.getItem(TOKEN_KEY) !== token || snapshot.recordId !== expectedRecordId) return 'stop'
+  const current = riskStore.riskResult
+  if (!current || (current.recordId && current.recordId !== expectedRecordId)) return 'stop'
+  const previous = current.aiReview
+  if (previous && snapshot.attemptId < previous.attemptId) return 'ignore'
+  // Versions are scoped to an attempt and may restart at 1 after a manual retry.
+  if (previous && snapshot.attemptId === previous.attemptId && snapshot.version < previous.version) return 'ignore'
+  if (previous && snapshot.attemptId === previous.attemptId && previous.status !== 'pending') return 'stop'
+  return 'apply'
+}
+
+function applyReviewSnapshot(snapshot: AIReview, expectedRecordId: number, run: number, token: string) {
+  const decision = reviewSnapshotDecision(snapshot, expectedRecordId, run, token)
+  if (decision === 'ignore') return riskStore.riskResult?.aiReview?.status === 'pending'
+  if (decision === 'stop') return false
+  const current = riskStore.riskResult
+  if (!current) return false
+  // Nested assignment keeps the result object identity stable for the alert watcher.
+  current.aiReview = snapshot
+  return snapshot.status === 'pending'
+}
+
+function queueReviewSnapshot(snapshot: AIReview, recordId: number, run: number, token: string) {
+  if (reviewSnapshotDecision(snapshot, recordId, run, token) !== 'apply') return
+  const queued = pendingPreview
+  if (queued && (snapshot.attemptId < queued.attemptId ||
+    (snapshot.attemptId === queued.attemptId && snapshot.version <= queued.version))) return
+  pendingPreview = snapshot
+  if (previewFrame) return
+  previewFrame = requestAnimationFrame(() => {
+    previewFrame = 0
+    const latest = pendingPreview
+    pendingPreview = null
+    if (latest) applyReviewSnapshot(latest, recordId, run, token)
+  })
+}
+
+function delay(ms: number, signal: AbortSignal) {
+  return new Promise<void>((resolve, reject) => {
+    const finish = () => {
+      signal.removeEventListener('abort', abort)
+      resolve()
+    }
+    const timer = window.setTimeout(finish, ms)
+    const abort = () => {
+      window.clearTimeout(timer)
+      signal.removeEventListener('abort', abort)
+      reject(new DOMException('Aborted', 'AbortError'))
+    }
+    signal.addEventListener('abort', abort, { once: true })
+    if (signal.aborted) abort()
+  })
+}
+
+async function readReviewStream(recordId: number, controller: AbortController, run: number, token: string): Promise<boolean> {
+  const response = await openRiskReviewStream(recordId, controller.signal)
+  const reader = response.body!.getReader()
+  const decoder = new TextDecoder()
+  let terminal = false
+  const parser = new SSEParser((event) => {
+    try {
+      const snapshot = JSON.parse(event.data) as AIReview
+      const decision = reviewSnapshotDecision(snapshot, recordId, run, token)
+      if (decision === 'apply') {
+        queueReviewSnapshot(snapshot, recordId, run, token)
+        if (snapshot.status !== 'pending') terminal = true
+      } else if (decision === 'stop' && riskStore.riskResult?.aiReview?.status !== 'pending') {
+        terminal = true
+      }
+    } catch {
+      // Ignore malformed frames and keep the stream alive for the next complete snapshot.
+    }
+  })
+  try {
+    while (run === reviewRun && localStorage.getItem(TOKEN_KEY) === token) {
+      const { done, value } = await reader.read()
+      if (done) {
+        parser.feed(decoder.decode())
+        parser.finish()
+        return terminal
+      }
+      parser.feed(decoder.decode(value, { stream: true }))
+      if (terminal) return true
+    }
+    return false
+  } finally {
+    await reader.cancel().catch(() => undefined)
+  }
+}
+
+async function startReviewUpdates(recordId: number, initial: AIReview) {
+  stopReviewUpdates()
+  reviewTimedOut.value = false
+  if (initial.status !== 'pending') return
+  const run = reviewRun
+  const token = localStorage.getItem(TOKEN_KEY) || ''
+  const controller = new AbortController()
+  reviewAbort = controller
+  const deadline = performance.now() + reviewDeadlineMs
+  const deadlineTimer = window.setTimeout(() => {
+    const activeRecordId = riskStore.riskResult?.recordId || viewingHistoryId.value
+    if (run === reviewRun && activeRecordId === recordId) reviewTimedOut.value = true
+    controller.abort()
+  }, reviewDeadlineMs)
+  try {
+    const retryDelays = [1000, 2000, 4000]
+    for (let connectionIndex = 0; connectionIndex <= retryDelays.length; connectionIndex++) {
+      if (controller.signal.aborted || run !== reviewRun || localStorage.getItem(TOKEN_KEY) !== token || performance.now() >= deadline) return
+      if (connectionIndex > 0) {
+        const waitMs = retryDelays[connectionIndex - 1]
+        if (performance.now() + waitMs >= deadline) return
+        try { await delay(waitMs, controller.signal) } catch { return }
+      }
+      let terminal = false
+      try {
+        terminal = await readReviewStream(recordId, controller, run, token)
+      } catch (error) {
+        if (controller.signal.aborted || run !== reviewRun || isTerminalReviewError(error)) return
+      }
+      if (terminal || controller.signal.aborted || run !== reviewRun) return
+
+      // Reconcile after every disconnect before retrying or switching to polling.
+      try {
+        const snapshot = await getRiskReview(recordId, controller.signal)
+        if (!applyReviewSnapshot(snapshot, recordId, run, token)) return
+      } catch (error) {
+        if (controller.signal.aborted || run !== reviewRun || isTerminalReviewError(error)) return
+      }
+    }
+
+    // Once the initial connection and three backoff retries are exhausted, poll only.
+    while (performance.now() < deadline && !controller.signal.aborted && run === reviewRun && localStorage.getItem(TOKEN_KEY) === token) {
+      try { await delay(Math.min(2000, deadline - performance.now()), controller.signal) } catch { return }
+      if (controller.signal.aborted || run !== reviewRun || localStorage.getItem(TOKEN_KEY) !== token) return
+      try {
+        const snapshot = await getRiskReview(recordId, controller.signal)
+        if (!applyReviewSnapshot(snapshot, recordId, run, token)) return
+      } catch (error) {
+        if (controller.signal.aborted || run !== reviewRun || isTerminalReviewError(error)) return
+      }
+    }
+  } finally {
+    window.clearTimeout(deadlineTimer)
+  }
+}
+
+async function restoreRecord(recordId: number) {
+  stopReviewUpdates()
+  restoreAbort?.abort()
+  const controller = new AbortController()
+  restoreAbort = controller
+  const run = reviewRun
+  const token = localStorage.getItem(TOKEN_KEY) || ''
+  try {
+    const detail = await getRiskRecord(recordId, controller.signal)
+    if (run !== reviewRun || token !== (localStorage.getItem(TOKEN_KEY) || '')) return
+    if (!detail.result) {
+      ElMessage.warning('该记录缺少结果快照，无法查看')
+      return
+    }
+    let review = detail.result.aiReview
+    try {
+      // The task state can advance independently from the immutable result snapshot.
+      // GET is read-only and gives history restores the current attempt/version.
+      review = await getRiskReview(recordId, controller.signal)
+    } catch {
+      if (run !== reviewRun || token !== (localStorage.getItem(TOKEN_KEY) || '')) return
+      // Older records may only have an embedded snapshot, which remains usable.
+    }
+    if (run !== reviewRun || token !== (localStorage.getItem(TOKEN_KEY) || '')) return
+    const restored = { ...detail.result, recordId, aiReview: review }
+    riskStore.setResult(restored)
+    currentHistoryName.value = detail.enterpriseName || ''
+    viewingHistoryId.value = recordId
+    riskStore.setHistoryRecordId(recordId)
+    currentHistoryDetail.value = detail
+    await nextTick()
+    if (run !== reviewRun || token !== (localStorage.getItem(TOKEN_KEY) || '')) return
+    initBarChart()
+    if (restored.aiReview) startReviewUpdates(recordId, restored.aiReview)
+  } catch {
+    // 错误已由拦截器提示
+  }
+}
+
+interface ReviewDisplayRow {
+  position: number
+  code: string
+  factor: string
+  score: number
+  explanation: string
+  checks: string[]
+  generated: boolean
+  streaming: boolean
+}
+
+const neutralHighScoreText = '该指标当前得分较高，请按本机构现行审核规则核验相关材料。'
+const generalReviewText = '请按本机构现行信贷审核规则核验经营真实性、现金流、偿债能力及相关证明材料。'
+
+function buildReviewRows(items: ReviewItem[], status?: AIReview['status']): ReviewDisplayRow[] {
+  return (result.value?.deductions || []).slice(0, 3).map((deduction, position) => {
+    const item = items.find((candidate) => candidate.position === position && candidate.code === deduction.code)
+    return {
+      position,
+      code: deduction.code || '',
+      factor: deduction.factor,
+      score: deduction.score,
+      explanation: item?.explanation || (deduction.score >= 80 ? neutralHighScoreText : deduction.reason),
+      checks: item?.checks || [],
+      generated: status === 'ready' && !!item,
+      streaming: status === 'pending' && !!item,
+    }
+  })
+}
+
+const reviewRows = computed(() => {
+  const review = aiReview.value
+  return buildReviewRows(review?.status === 'ready' ? review.items : review?.status === 'pending' ? review.preview : [], review?.status)
+})
+const printReviewRows = computed(() => {
+  const review = aiReview.value
+  return buildReviewRows(review?.status === 'ready' ? review.items : [], review?.status)
+})
+
+async function retryReview() {
+  const recordId = result.value?.recordId || viewingHistoryId.value
+  if (!recordId || retrySubmitting.value) return
+  const run = reviewRun
+  const token = localStorage.getItem(TOKEN_KEY) || ''
+  const expectedRecordId = recordId
+  const retryable = aiReview.value?.status === 'not_requested' ||
+    (aiReview.value?.status === 'failed' && aiReview.value.retryable)
+  if (!retryable || retryCountdown.value > 0) return
+  retrySubmitting.value = true
+  try {
+    const snapshot = await requestRiskReview(recordId)
+    if (
+      run !== reviewRun || token !== (localStorage.getItem(TOKEN_KEY) || '') ||
+      (riskStore.riskResult?.recordId || viewingHistoryId.value) !== expectedRecordId
+    ) return
+    if (riskStore.riskResult) riskStore.riskResult.aiReview = snapshot
+    startReviewUpdates(recordId, snapshot)
+  } catch {
+    // 错误已由拦截器提示
+  } finally {
+    retrySubmitting.value = false
+  }
+}
+
+watch(
+  () => router.currentRoute.value.query.recordId,
+  (value, oldValue) => {
+    if (value === oldValue) return
+    const id = Number(value)
+    if (Number.isInteger(id) && id > 0) void restoreRecord(id)
+    else {
+      stopReviewUpdates()
+      restoreAbort?.abort()
+    }
+  }
+)
 
 // ---------- 历史评估记录（当前账号）----------
 const historyRecords = ref<AssessmentRecordItem[]>([])
@@ -70,6 +401,22 @@ const transparencyRef = ref<{ scrollToIndicator: (code: string) => void } | null
 const activeAlerts = computed(() =>
   (result.value?.riskAlerts || []).filter((alert) => alert.severity === 'veto' || alert.severity === 'high')
 )
+
+watch(() => authStore.token, (token, previousToken) => {
+  stopReviewUpdates()
+  restoreAbort?.abort()
+  if (previousToken && token !== previousToken) {
+    riskStore.clearSessionData()
+    currentHistoryName.value = ''
+    viewingHistoryId.value = 0
+    currentHistoryDetail.value = null
+    formRows.value = []
+    formDrawerVisible.value = false
+    historyRecords.value = []
+    historyTotal.value = 0
+    historyPage.value = 1
+  }
+})
 
 watch(
   () => result.value,
@@ -116,16 +463,6 @@ async function loadHistory(page = 1) {
   }
 }
 
-async function restoreHistoryContext() {
-  try {
-    const detail = await getRiskRecord(viewingHistoryId.value)
-    currentHistoryName.value = detail.enterpriseName || ''
-    currentHistoryDetail.value = detail
-  } catch {
-    // 错误已由拦截器提示
-  }
-}
-
 function formatTime(iso?: string): string {
   if (!iso) return ''
   const d = new Date(iso)
@@ -135,23 +472,12 @@ function formatTime(iso?: string): string {
 }
 
 async function viewHistory(recordId: number) {
-  try {
-    const detail = await getRiskRecord(recordId)
-    if (!detail.result) {
-      ElMessage.warning('该记录缺少结果快照，无法查看')
-      return
-    }
-    riskStore.setResult(detail.result)
-    currentHistoryName.value = detail.enterpriseName || ''
-    viewingHistoryId.value = recordId
-    riskStore.setHistoryRecordId(recordId)
-    currentHistoryDetail.value = detail
-    await nextTick()
-    initBarChart()
-    window.scrollTo({ top: 0, behavior: 'smooth' })
-  } catch {
-    // 错误已由拦截器提示
+  if (String(router.currentRoute.value.query.recordId || '') !== String(recordId)) {
+    await router.replace({ path: '/result', query: { recordId: String(recordId) } })
+  } else {
+    await restoreRecord(recordId)
   }
+  window.scrollTo({ top: 0, behavior: 'smooth' })
 }
 
 function outcomeOption(outcome?: AssessmentOutcome) {
@@ -208,11 +534,13 @@ async function removeHistory(row: AssessmentRecordItem) {
     await deleteRiskRecord(row.id)
     ElMessage.success('已删除')
     if (viewingHistoryId.value === row.id) {
+      stopReviewUpdates()
       riskStore.setResult(null)
       currentHistoryName.value = ''
       viewingHistoryId.value = 0
       currentHistoryDetail.value = null
       riskStore.setHistoryRecordId(null)
+      await router.replace({ path: '/result' })
     }
     if (historyRecords.value.length === 1 && historyPage.value > 1) {
       loadHistory(historyPage.value - 1)
@@ -418,30 +746,47 @@ async function jumpToIndicator(code: string) {
           </el-col>
         </el-row>
 
-        <!-- 前三项扣分原因 -->
-        <div class="info-card deduction-card">
+        <div class="info-card ai-review-card">
           <h3 class="card-title">
-            <el-icon style="vertical-align: middle; margin-right: 6px" color="#e6a23c"><WarningFilled /></el-icon>
-            前三项扣分原因（人工复核提示）
+            <el-icon style="vertical-align: middle; margin-right: 6px" color="#2c6e49"><Document /></el-icon>
+            重点指标复核提示
           </h3>
+          <p v-if="reviewStatusText" class="review-status" role="status">{{ reviewStatusText }}</p>
+          <div v-if="aiReview?.status === 'pending' && !reviewRows.some((row) => row.streaming)" class="review-skeleton" aria-label="复核提示生成中">
+            <div v-for="n in 2" :key="n" class="skeleton-line" />
+          </div>
           <el-row :gutter="16">
-            <el-col v-for="(ded, idx) in result.deductions" :key="ded.factor" :xs="24" :sm="12" :md="8">
+            <el-col v-for="(row, idx) in reviewRows" :key="`${row.position}-${row.code}`" :xs="24" :sm="12" :md="8">
               <div class="deduction-item">
                 <div class="deduction-rank">NO.{{ idx + 1 }}</div>
                 <div class="deduction-body">
-                  <div class="deduction-factor">{{ ded.factor }}</div>
+                  <div class="review-heading">
+                    <div class="deduction-factor">{{ row.factor }}</div>
+                    <el-tag v-if="row.generated" :disable-transitions="true" size="small" type="success" effect="plain">AI生成</el-tag>
+                  </div>
                   <el-progress
-                    :percentage="ded.score"
+                    :percentage="row.score"
                     :stroke-width="10"
-                    :color="ded.score >= 60 ? '#e6a23c' : '#f56c6c'"
+                    :color="row.score >= 60 ? '#e6a23c' : '#f56c6c'"
                     :show-text="false"
                     style="margin: 8px 0"
                   />
-                  <p class="deduction-reason">{{ ded.reason }}</p>
+                  <p class="deduction-reason">
+                    <span :key="row.explanation" :class="{ 'review-explanation-streaming': row.streaming }">{{ row.explanation }}</span>
+                    <span v-if="row.streaming" class="review-cursor" aria-hidden="true" />
+                  </p>
+                  <ul v-if="row.checks.length" class="review-checks"><li v-for="check in row.checks" :key="check">{{ check }}</li></ul>
                 </div>
               </div>
             </el-col>
           </el-row>
+          <p v-if="!reviewRows.length" class="review-fallback">{{ generalReviewText }}</p>
+          <el-button
+            v-if="aiReview?.status === 'not_requested' || (aiReview?.status === 'failed' && aiReview.retryable)"
+            size="small"
+            :disabled="retrySubmitting || retryCountdown > 0"
+            @click="retryReview"
+          >{{ retrySubmitting ? '正在提交…' : retryCountdown ? `${retryCountdown} 秒后可重试` : aiReview?.status === 'not_requested' ? '生成复核提示' : '重试生成' }}</el-button>
         </div>
 
         <!-- 因子贡献图 -->
@@ -672,10 +1017,16 @@ async function jumpToIndicator(code: string) {
         </tbody>
       </table>
 
-      <h2>三、扣分原因（人工复核提示）</h2>
-      <ol class="pr-deductions">
-        <li v-for="d in result.deductions" :key="d.factor">{{ d.factor }}：{{ d.reason }}</li>
+      <h2>三、重点指标复核提示</h2>
+      <p v-if="aiReview?.status === 'pending'">复核提示正在生成中，当前报告暂不包含生成内容。</p>
+      <ol v-if="printReviewRows.length" class="pr-deductions">
+        <li v-for="row in printReviewRows" :key="`${row.position}-${row.code}`">
+          <strong>{{ row.factor }}（得分 {{ row.score }}<template v-if="row.code">，{{ row.code }}</template>）</strong>
+          <el-tag v-if="row.generated" size="small" type="success" effect="plain">AI生成</el-tag>：{{ row.explanation }}
+          <ul v-if="row.checks.length"><li v-for="check in row.checks" :key="check">{{ check }}</li></ul>
+        </li>
       </ol>
+      <p v-else>{{ generalReviewText }}</p>
 
       <div class="pr-footer">
         <p>
@@ -783,38 +1134,15 @@ async function jumpToIndicator(code: string) {
   margin-bottom: 20px;
 }
 
-// 贡献图：移动端横向滑动，避免因子名称占满左侧
-.contribution-scroll {
-  width: 100%;
-  overflow-x: auto;
-  -webkit-overflow-scrolling: touch;
-
-  .contribution-chart {
-    width: 100%;
-    height: 320px;
-  }
-}
-
-.scroll-hint {
-  display: none;
-}
-
-@media (max-width: 768px) {
-  .scroll-hint {
-    display: block;
-    text-align: center;
-    font-size: 12px;
-    color: #909399;
-    margin-top: 8px;
-  }
-}
-
-.deduction-card {
+.ai-review-card {
   margin-bottom: 20px;
 
-  .el-row .el-col {
-    margin-bottom: 16px;
+  .review-status {
+    color: #909399;
+    font-size: 13px;
   }
+
+  .el-row .el-col { margin-bottom: 16px; }
 
   .deduction-item {
     display: flex;
@@ -841,6 +1169,14 @@ async function jumpToIndicator(code: string) {
 
     .deduction-body {
       flex: 1;
+      min-width: 0;
+
+      .review-heading {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 10px;
+      }
 
       .deduction-factor {
         font-size: 14px;
@@ -850,10 +1186,102 @@ async function jumpToIndicator(code: string) {
 
       .deduction-reason {
         font-size: 12px;
-        color: #909399;
+        color: #606266;
+        line-height: 1.6;
+        margin: 8px 0 0;
+      }
+
+      .review-checks {
+        margin: 8px 0 0;
+        padding-left: 20px;
+        color: #606266;
+        font-size: 12px;
         line-height: 1.6;
       }
     }
+  }
+
+  .review-explanation-streaming { animation: review-appear 150ms ease-out both; }
+
+  .review-cursor {
+    display: inline-block;
+    width: 1px;
+    height: 1em;
+    margin-left: 2px;
+    vertical-align: text-bottom;
+    background: #2c6e49;
+    animation: review-cursor-blink 900ms steps(2, start) infinite;
+  }
+
+  .review-fallback {
+    padding: 10px 14px;
+    border-radius: 6px;
+    background: #f7f8f7;
+    color: #606266;
+    font-size: 13px;
+    line-height: 1.7;
+  }
+
+  .review-fallback p { margin: 0; }
+
+  .review-skeleton .skeleton-line {
+    height: 14px;
+    margin: 12px 0;
+    border-radius: 7px;
+    background: linear-gradient(90deg, #f1f3f2 25%, #e7ebe8 50%, #f1f3f2 75%);
+    background-size: 200% 100%;
+    animation: review-shimmer 1.4s linear infinite, review-fade 1.2s ease-in-out infinite alternate;
+  }
+
+  .review-skeleton .skeleton-line:last-child { width: 72%; }
+}
+
+@keyframes review-appear {
+  from { opacity: 0; transform: translateY(5px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+
+@keyframes review-shimmer {
+  to { background-position: -200% 0; }
+}
+
+@keyframes review-fade {
+  to { opacity: 0.52; }
+}
+
+@keyframes review-cursor-blink {
+  to { visibility: hidden; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .ai-review-card .review-explanation-streaming,
+  .ai-review-card .review-skeleton .skeleton-line,
+  .ai-review-card .review-cursor { animation: none; }
+}
+
+// 贡献图：移动端横向滑动，避免因子名称占满左侧
+.contribution-scroll {
+  width: 100%;
+  overflow-x: auto;
+  -webkit-overflow-scrolling: touch;
+
+  .contribution-chart {
+    width: 100%;
+    height: 320px;
+  }
+}
+
+.scroll-hint {
+  display: none;
+}
+
+@media (max-width: 768px) {
+  .scroll-hint {
+    display: block;
+    text-align: center;
+    font-size: 12px;
+    color: #909399;
+    margin-top: 8px;
   }
 }
 
