@@ -47,6 +47,20 @@ export const useRiskStore = defineStore('risk', () => {
     historyRecordId.value = recordId
   }
 
+  /** Remove account-specific assessment state when the authenticated user signs out or changes. */
+  function clearSessionData() {
+    riskResult.value = null
+    historyRecordId.value = null
+    dynamicForm.value = {
+      enterpriseName: '',
+      businessType: '',
+      selectedCategories: [],
+      mixedBusiness: {},
+      indicators: {},
+    }
+    formSnapshot.value = []
+  }
+
   // 本次评估提交时的原始表单快照（供结果页查看）
   const formSnapshot = ref<FormSnapshotItem[]>([])
   function setFormSnapshot(items: FormSnapshotItem[]) {
@@ -62,6 +76,7 @@ export const useRiskStore = defineStore('risk', () => {
     assessDynamic,
     setResult,
     setHistoryRecordId,
+    clearSessionData,
     formSnapshot,
     setFormSnapshot,
   }

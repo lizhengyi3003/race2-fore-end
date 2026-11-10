@@ -17,6 +17,8 @@ export interface Deduction {
 
 /** 风险评估结果（评分卡 0-1000 分） */
 export interface RiskResult {
+  recordId?: number
+  aiReview?: AIReview
   score: number // 综合信用评分 (0-1000)
   probability: number // 违约概率 (0-1)
   level: '低风险' | '中等风险' | '高风险'
@@ -31,6 +33,31 @@ export interface RiskResult {
   engineUsage?: EngineUsage
   riskAlerts?: RiskAlert[]
   transparency?: RiskTransparency
+}
+
+export type AIReviewStatus = 'not_requested' | 'pending' | 'ready' | 'failed' | 'disabled' | 'not_applicable'
+
+export interface ReviewItem {
+  position: number
+  code: string
+  explanation: string
+  checks: string[]
+}
+
+export interface AIReview {
+  recordId: number
+  status: AIReviewStatus
+  attemptId: number
+  version: number
+  items: ReviewItem[]
+  preview: ReviewItem[]
+  model: string | null
+  promptVersion: string | null
+  generatedAt: string | null
+  errorCode: string | null
+  message: string | null
+  retryAfter: number
+  retryable: boolean
 }
 
 export interface EngineUsage {

@@ -2,6 +2,7 @@ import { defineStore } from 'pinia'
 import { ref, computed } from 'vue'
 import { login as apiLogin, getMe, type LoginUser } from '@/api/auth'
 import { TOKEN_KEY, USER_KEY } from '@/constants'
+import { useRiskStore } from '@/stores/risk'
 
 /** 判断错误是否为「登录失效」：业务 401（信封 code）或 HTTP 401 */
 function isAuthError(err: unknown): boolean {
@@ -51,10 +52,15 @@ export const useAuthStore = defineStore('auth', () => {
   }
 
   function logout() {
+    useRiskStore().clearSessionData()
     token.value = ''
     user.value = null
     localStorage.removeItem(TOKEN_KEY)
     localStorage.removeItem(USER_KEY)
+  }
+
+  if (typeof window !== 'undefined') {
+    window.addEventListener('race:auth-expired', logout)
   }
 
   return { token, user, isLoggedIn, displayName, login, logout, restoreSession }
