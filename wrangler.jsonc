@@ -1,12 +1,24 @@
 {
   "$schema": "node_modules/wrangler/config-schema.json",
   "name": "race-fore-end",
+  "account_id": "d08d42f9b1e53cc1648cdc9c1eab5a0e",
+  "main": "cloudflare/site-worker.js",
   "compatibility_date": "2026-08-07",
   "compatibility_flags": ["nodejs_compat"],
   "assets": {
-    "directory": "./dist"
+    "directory": "./dist",
+    "binding": "ASSETS",
+    "run_worker_first": ["/api/*", "/admin", "/admin/*", "/healthz"],
+    "not_found_handling": "single-page-application"
   },
+  "workers_dev": true,
+  "vars": { "BACKEND_ORIGIN": "https://backend.intellicoretech.cn" },
+  "routes": [
+    { "pattern": "intellicoretech.cn", "custom_domain": true },
+    { "pattern": "api.intellicoretech.cn/*", "zone_name": "intellicoretech.cn" }
+  ],
   "observability": {
-    "enabled": true
+    "enabled": true,
+    "traces": { "enabled": true, "head_sampling_rate": 0.1 }
   }
 }

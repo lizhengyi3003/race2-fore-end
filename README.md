@@ -1,5 +1,7 @@
 # 涉农信贷风控系统 · 竞赛前端（fore-end）
 
+> 2026-11-10 生产部署：源仓库为 race2-fore-end，静态资源和 API 网关由 race-fore-end Worker 托管；所有域名统一使用同域 `/api/v1`。当前部署与 CI 配置以 [cloudflare/DEPLOYMENT.md](cloudflare/DEPLOYMENT.md) 和 wrangler.jsonc 为准，文末旧网关与 dev 分流架构仅供历史参考。
+
 > "挑战杯"全国大学生课外学术科技作品竞赛
 > 面向用户的演示前端：数据录入 → 信用评估 → 结果展示，配套数据看板与团队介绍
 > 版本：Demo v1.9
