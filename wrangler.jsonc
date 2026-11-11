@@ -12,6 +12,7 @@
     "not_found_handling": "single-page-application"
   },
   "workers_dev": true,
+  "preview_urls": false,
   "vars": { "BACKEND_ORIGIN": "https://backend.intellicoretech.cn" },
   "routes": [
     { "pattern": "intellicoretech.cn", "custom_domain": true },

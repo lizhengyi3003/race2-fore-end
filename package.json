@@ -14,14 +14,14 @@
     "Vue3",
     "Vite"
   ],
-  "license": "UNLICENSED",
+  "license": "AGPL-3.0-only",
   "author": "涉农信贷风控系统项目组",
   "repository": {
     "type": "git",
     "url": "git+https://github.com/lizhengyi3003/race2-fore-end.git"
   },
   "engines": {
-    "node": ">=20.19.0",
+    "node": "^22.13.0 || >=24",
     "npm": ">=10"
   },
   "scripts": {
@@ -61,5 +61,16 @@
     "vite": "^8.1.1",
     "vue-tsc": "^3.3.5",
     "wrangler": "^4.125.0"
+  },
+  "overrides": {
+    "eslint": {
+      "minimatch": "11.0.1"
+    },
+    "@eslint/config-array": {
+      "minimatch": "11.0.1"
+    },
+    "@typescript-eslint/typescript-estree": {
+      "minimatch": "11.0.1"
+    }
   }
 }

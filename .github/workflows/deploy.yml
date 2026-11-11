@@ -28,13 +28,21 @@ jobs:
           cache: npm
       - run: npm ci
       - run: npm run build
-      - run: |
+      - name: Deploy and verify the public site
+        run: |
+          set -euo pipefail
           latest=$(gh api "repos/$GITHUB_REPOSITORY/commits/main" --jq '.sha')
           if [ "$latest" != "$REVISION" ]; then
             echo 'Skipping superseded revision'
             exit 0
           fi
           npx wrangler deploy
+          for origin in https://intellicoretech.cn https://api.intellicoretech.cn; do
+            curl --fail --silent --show-error --max-time 15 --retry 4 --retry-all-errors "$origin/healthz" |
+              jq -e '.status == "ok" and .service == "race3-frontend"'
+            curl --fail --silent --show-error --max-time 15 --retry 4 --retry-all-errors "$origin/api/v1/dashboard/stats" |
+              jq -e '.code == 200 and (.data.totalAssess | type == "number")'
+          done
         env:
           GH_TOKEN: ${{ github.token }}
           REVISION: ${{ github.event.workflow_run.head_sha }}
