@@ -57,7 +57,7 @@ npm run dev        # http://localhost:5175，/api 代理到 localhost:18001
 | 文件 | 值 | 说明 |
 |---|---|---|
 | `.env.development` | `VITE_API_BASE_URL=/api/v1` | 开发走 Vite 代理（vite.config.ts 默认代理到 :18001，可通过 VITE_DEV_PROXY 覆盖） |
-| `.env.production` | （已注释） | 生产**按域名运行时分流**：`src/api/index.ts` 依据 `hostname` 自动选择主站 `/api/v1` 或 dev 预览 `/dev/api/v1`，无需环境变量 |
+| `.env.production` | （可选） | 生产默认请求同域 `/api/v1`。需要使用其他 API 地址时，在构建前设置 `VITE_API_BASE_URL` |
 
 ## 与后端契约
 
