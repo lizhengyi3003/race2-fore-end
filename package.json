@@ -21,7 +21,7 @@
     "url": "git+https://github.com/lizhengyi3003/race2-fore-end.git"
   },
   "engines": {
-    "node": ">=20.19.0",
+    "node": "^22.13.0 || >=24",
     "npm": ">=10"
   },
   "scripts": {
