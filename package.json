@@ -18,13 +18,15 @@
   "author": "涉农信贷风控系统项目组",
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/lizhengyi3003/race-fore-end.git"
+    "url": "git+https://github.com/lizhengyi3003/race2-fore-end.git"
   },
   "engines": {
     "node": ">=20.19.0",
     "npm": ">=10"
   },
   "scripts": {
+    "test:worker": "node --test cloudflare/site-worker.test.js",
+    "deploy": "npm run build && wrangler deploy",
     "dev": "vite",
     "build": "vue-tsc -b && vite build",
     "preview": "vite preview",

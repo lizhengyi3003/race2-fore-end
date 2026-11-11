@@ -11,15 +11,9 @@ interface ApiEnvelope<T = unknown> {
 }
 
 // ------------------------------------------------------------------
-// API base：按部署环境自动分流（无需每次切分支改代码）
-//   *.workers.dev 预览（dev 分支）→ dev 后端 /dev/api/v1
-//   自定义域名 intellicoretech.cn（main 生产）→ main 后端 /api/v1
-//   VITE_API_BASE_URL 显式配置时优先（如本地开发 /api/v1）
+// API 与站点同域，由 Worker / Vite 转发；独立环境可显式覆盖。
 // ------------------------------------------------------------------
-const isWorkersPreview = typeof window !== 'undefined' && window.location.hostname.endsWith('.workers.dev')
-export const apiBaseURL =
-  import.meta.env.VITE_API_BASE_URL ||
-  (isWorkersPreview ? 'https://api.intellicoretech.cn/dev/api/v1' : 'https://api.intellicoretech.cn/api/v1')
+export const apiBaseURL = import.meta.env.VITE_API_BASE_URL || '/api/v1'
 
 const http: AxiosInstance = axios.create({
   baseURL: apiBaseURL,
