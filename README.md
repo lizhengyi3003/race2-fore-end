@@ -27,7 +27,7 @@ Vue 3.5（`<script setup>` SFC）+ TypeScript 6 + Vite 8 + Element Plus + Pinia 
 fore-end/
 ├── src/
 │   ├── api/          # 接口封装（auth / captcha / risk / indicator / dashboard / index）
-│   │   └── index.ts  # axios 实例：自动分流、JWT、信封解包、401 统一处理
+│   │   └── index.ts  # axios 实例：API 基址、JWT、响应解包、401 统一处理
 │   ├── components/   # 动态字段、混合经营占比、风险弹窗、数据透明度与图表组件
 │   ├── layouts/      # 应用布局（AppLayout：侧边栏 + 抽屉 + 顶栏）
 │   ├── router/       # 路由（懒加载 + chunk 失效自动刷新 + 登录守卫 + 导航菜单 NAV_MENUS）
