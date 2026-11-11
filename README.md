@@ -122,3 +122,9 @@ flowchart LR
 2. 上传到 `race-fore-end` Worker（静态资源 Worker，或用 wrangler `[assets]`）
 3. 默认按域名自动选择生产或预览 API；如需覆盖，再配置 `.env.production` 中的 `VITE_API_BASE_URL`
 4. 部署后访问 https://intellicoretech.cn
+
+## 许可证与源码
+
+本仓库的项目自有代码按 [GNU Affero General Public License v3.0 only](LICENSE) 发布（`AGPL-3.0-only`）。第三方依赖和资料沿用各自的许可条款。
+
+对应源码、构建配置和部署说明见 [GitHub 仓库](https://github.com/lizhengyi3003/race2-fore-end)。

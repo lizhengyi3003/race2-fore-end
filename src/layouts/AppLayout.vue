@@ -164,6 +164,7 @@ onBeforeUnmount(() => window.removeEventListener('resize', updateIsMobile))
       <!-- 底部 -->
       <el-footer class="app-footer">
         <span>{{ FOOTER_TEXT }}</span>
+        <a href="https://github.com/lizhengyi3003/race2-fore-end">源代码</a>
       </el-footer>
     </el-container>
   </el-container>
@@ -276,6 +277,7 @@ onBeforeUnmount(() => window.removeEventListener('resize', updateIsMobile))
 // 底部
 .app-footer {
   display: flex;
+  gap: 0.75rem;
   align-items: center;
   justify-content: center;
   height: 40px;

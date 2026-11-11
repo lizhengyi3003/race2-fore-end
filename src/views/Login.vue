@@ -200,7 +200,9 @@ function handleKeydown(e: KeyboardEvent) {
       </div>
     </div>
 
-    <div class="login-footer">{{ FOOTER_TEXT }}</div>
+    <div class="login-footer">
+      {{ FOOTER_TEXT }} · <a href="https://github.com/lizhengyi3003/race2-fore-end">源代码</a>
+    </div>
 
     <!-- 行为验证码弹窗：点击登录后弹出，校验通过才继续登录 -->
     <el-dialog

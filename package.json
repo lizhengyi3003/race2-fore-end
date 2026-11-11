@@ -14,7 +14,7 @@
     "Vue3",
     "Vite"
   ],
-  "license": "UNLICENSED",
+  "license": "AGPL-3.0-only",
   "author": "涉农信贷风控系统项目组",
   "repository": {
     "type": "git",
