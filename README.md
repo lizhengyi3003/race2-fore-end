@@ -1,7 +1,5 @@
 # 涉农信贷风控系统 · 竞赛前端（fore-end）
 
-> 2026-11-10 生产部署：源仓库为 race2-fore-end，静态资源和 API 网关由 race-fore-end Worker 托管；所有域名统一使用同域 `/api/v1`。当前部署与 CI 配置以 [cloudflare/DEPLOYMENT.md](cloudflare/DEPLOYMENT.md) 和 wrangler.jsonc 为准，文末旧网关与 dev 分流架构仅供历史参考。
-
 > "挑战杯"全国大学生课外学术科技作品竞赛
 > 面向用户的演示前端：数据录入 → 信用评估 → 结果展示，配套数据看板与团队介绍
 > 版本：Demo v1.9
@@ -101,27 +99,18 @@ npm run build         # vue-tsc + vite 构建验证
 
 ## 部署架构
 
-前端通过 **Cloudflare Workers** 部署（非 Pages），推送到 `main` 分支自动构建上线。
+前端静态资源和 API 网关由同一个 Cloudflare Worker `race-fore-end` 承载。`main` 的推送通过 GitHub Actions 的 `Frontend CI` 后，`Deploy Cloudflare` 使用 Wrangler 发布已验证的提交。
 
 ```mermaid
 flowchart LR
     U[浏览器] --> F["前端 Worker race-fore-end<br/>intellicoretech.cn"]
-    F --> G["API 网关 Worker intellicore-worker<br/>api.intellicoretech.cn"]
-    G --> T["Cloudflare Tunnel<br/>race-backend-tunnel"]
-    T --> B["后端 FastAPI<br/>8.156.70.151:8000"]
+    F -->|API 和管理端| T["Cloudflare Tunnel<br/>race-backend-tunnel"]
+    T --> B["FastAPI<br/>127.0.0.1:8000"]
 ```
 
-- 前端静态站：Worker `race-fore-end`，自定义域名 `intellicoretech.cn`，git 集成自动部署
-- API 网关：Worker `intellicore-worker`，路由 `api.intellicoretech.cn/*`，将请求代理到 `backend.intellicoretech.cn`
-- 后端隧道：`race-backend-tunnel`（backend.intellicoretech.cn → 后端 :8000）
-- 网关源码存档：`cloudflare/intellicore-worker/`（worker.js / metadata.json / wrangler.jsonc）
-
-### 本地部署步骤（若需手动）
-
-1. `npm run build` 生成 `dist`
-2. 上传到 `race-fore-end` Worker（静态资源 Worker，或用 wrangler `[assets]`）
-3. 默认按域名自动选择生产或预览 API；如需覆盖，再配置 `.env.production` 中的 `VITE_API_BASE_URL`
-4. 部署后访问 https://intellicoretech.cn
+- 用户端默认通过同域 `/api/v1` 调用后端，管理端位于 [网站的 /admin/](https://intellicoretech.cn/admin/)。
+- `api.intellicoretech.cn/*` 也绑定到该 Worker。Worker 将 API 和管理端请求转发到 `backend.intellicoretech.cn`，经 Tunnel 到达 FastAPI。
+- [部署手册](cloudflare/DEPLOYMENT.md)记录发布、公开入口和验收检查。
 
 ## 许可证与源码
 
